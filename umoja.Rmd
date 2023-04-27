@@ -1,0 +1,196 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+## Import libraries
+```{r}
+library(tidymodels)
+library(randomForest)
+library(caret)
+library(e1071)
+```
+
+## Import datasets
+```{r}
+df_other <- Train %>%
+            mutate(Label = factor(Label))
+df_test  <- Test
+
+# training set proportions by Label
+df_other %>% 
+  count(Label) %>% 
+  mutate(prop = n/sum(n))
+
+```
+## Validation set
+```{r}
+set.seed(234)
+val_set <- validation_split(df_other, 
+                            strata = Label, 
+                            prop = 0.80)
+val_set
+```
+
+## A First MODEL: TREE-BASED ENSEMBLE
+##  Query the number of cores 
+```{r}
+cores <- parallel::detectCores()
+cores
+```
+
+## Pass engine-specific arguments
+```{r}
+rf_mod <- 
+  rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
+  set_engine("ranger", num.threads = cores) %>% 
+  set_mode("classification")
+
+```
+
+# CREATE THE RECIPE AND WORKFLOW
+
+```{r}
+rf_recipe <- 
+  recipe(Label ~ ., data = df_other) %>% 
+  step_novel(all_nominal(), -all_outcomes())  %>% 
+  update_role(ID, new_role = "ID")
+   
+  
+```
+
+## Adding this recipe to our parsnip model gives us a new workflow
+```{r}
+rf_workflow <- 
+  workflow() %>% 
+  add_model(rf_mod) %>% 
+  add_recipe(rf_recipe)
+
+```
+
+# TRAIN AND TUNE THE MODEL
+When we set up our parsnip model, we chose two hyperparameters for tuning:
+
+```{r}
+rf_mod
+```
+
+## Show what will be tuned
+```{r}
+extract_parameter_set_dials(rf_mod)
+```
+
+We will use a space-filling design to tune, with 25 candidate models:
+```{r}
+set.seed(345)
+rf_res <- 
+  rf_workflow %>% 
+  tune_grid(val_set,
+            grid = 25,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+
+```
+
+Here are our top 5 random forest models, out of the 25 candidates:
+```{r}
+rf_res %>% 
+  show_best(metric = "roc_auc")
+```
+
+## Plotting the results of the tuning process 
+```{r}
+autoplot(rf_res)
+```
+```{r}
+rf_best <- 
+  rf_res %>% 
+  select_best(metric = "roc_auc")
+rf_best
+```
+
+## Select the best model according to the ROC AUC metric
+```{r}
+rf_best <- 
+  rf_res %>% 
+  select_best(metric = "roc_auc")
+rf_best
+```
+##
+```{r}
+rf_res %>% 
+  collect_predictions()
+```
+## To filter the predictions for only our best random forest model
+```{r}
+rf_auc <- 
+  rf_res %>% 
+  collect_predictions(parameters = rf_best) %>% 
+  roc_curve(Label, .pred_1) %>% 
+  mutate(model = "Random Forest")
+
+```
+
+
+# THE LAST FIT
+```{r}
+# the last model
+last_rf_mod <- 
+  rand_forest(mtry = 7, min_n = 7, trees = 1000) %>% 
+  set_engine("ranger", num.threads = cores, importance = "impurity") %>% 
+  set_mode("classification")
+
+# the last workflow
+last_rf_workflow <- 
+  rf_workflow %>% 
+  update_model(last_rf_mod)
+
+splits      <- initial_split(df.train, strata = Label)
+
+
+# the last fit
+set.seed(345)
+last_rf_fit <- 
+  last_rf_workflow %>% 
+  last_fit(splits )
+
+last_rf_fit
+
+
+
+```
+
+
+#  Train the model
+
+
+Set the control parameter
+You will proceed as follow to construct and evaluate the model:
+
+* Evaluate the model with the default setting
+* Find the best number of mtry
+* Find the best number of maxnodes
+* Find the best number of ntrees
+* Evaluate the model on the test dataset
+
+## Default setting
+K-fold cross validation is controlled by the trainControl() function
+
+# Define the control
+```{r}
+trControl <- trainControl(method = "cv",
+    number = 5,
+    search = "grid")
+```
+Let’s try the build the model with the default values.
+```{r}
+set.seed(1234)
+# Run the model
+rf_default <- train(Label~.,
+    data = df.train,
+    method = "rf",
+    metric = "Accuracy",
+    trControl = trControl)
+# Print the results
+print(rf_default)
+```
+
